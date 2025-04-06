@@ -6,8 +6,7 @@ from firebase_admin import credentials, db
 # Firebase Initialization
 if not firebase_admin._apps:
     try:
-        cred = credentials.Certificate(
-            r"C:\Users\utkar\OneDrive\Desktop\smartHid\smarthid-32dfc-firebase-adminsdk-fbsvc-30298c40df.json")
+        cred = credentials.Certificate(json.loads(st.secrets["firebase_json"]))
         firebase_admin.initialize_app(cred, {'databaseURL': 'https://smarthid-32dfc-default-rtdb.firebaseio.com/'})
     except Exception as e:
         st.error(f"Firebase initialization failed: {e}")
