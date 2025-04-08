@@ -43,16 +43,6 @@ def check_password():
 
 check_password()
 
-# ===== AUTO REFRESH TIMER (universal version) =====
-refresh_interval = 5  # seconds
-if 'last_refresh' not in st.session_state:
-    st.session_state.last_refresh = time.time()
-else:
-    now = time.time()
-    if now - st.session_state.last_refresh >= refresh_interval:
-        st.session_state.last_refresh = now
-        st.experimental_rerun()
-
 # ===== FIREBASE INIT =====
 if not firebase_admin._apps:
     try:
