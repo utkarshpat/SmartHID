@@ -5,6 +5,8 @@ from firebase_admin import credentials, db
 from datetime import datetime
 import time
 import json
+from streamlit.runtime.scriptrunner import RerunException
+from streamlit.runtime.scriptrunner.script_run_context import get_script_run_ctx
 
 # ===== PASSWORD PROTECTION =====
 if 'authenticated' not in st.session_state:
@@ -51,7 +53,9 @@ else:
     now = time.time()
     if now - st.session_state.last_refresh >= refresh_interval:
         st.session_state.last_refresh = now
-        st.experimental_rerun()
+        ctx = get_script_run_ctx()
+        if ctx is not None:
+            raise RerunException(ctx)
 
 # ===== FIREBASE INIT =====
 if not firebase_admin._apps:
