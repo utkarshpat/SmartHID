@@ -5,7 +5,6 @@ from firebase_admin import credentials, db
 from datetime import datetime
 import time
 import json
-from streamlit_autorefresh import st_autorefresh
 
 # ===== PASSWORD PROTECTION =====
 if 'authenticated' not in st.session_state:
@@ -43,6 +42,16 @@ def check_password():
     st.stop()
 
 check_password()
+
+# ===== AUTO REFRESH TIMER (best approach, no flicker) =====
+refresh_interval = 5  # seconds
+if 'last_refresh' not in st.session_state:
+    st.session_state.last_refresh = time.time()
+else:
+    now = time.time()
+    if now - st.session_state.last_refresh >= refresh_interval:
+        st.session_state.last_refresh = now
+        st.experimental_rerun()
 
 # ===== FIREBASE INIT =====
 if not firebase_admin._apps:
@@ -148,7 +157,7 @@ with st.sidebar:
     st.markdown(f'<div class="led-preview" style="background-color: {preview_color};"></div>', unsafe_allow_html=True)
 
     st.markdown("---")
-    st.subheader("🛁 Device Status")
+    st.subheader("📡 Device Status")
     status, last_seen = get_device_status()
     last_seen_str = datetime.fromtimestamp(last_seen).strftime('%H:%M:%S') if last_seen > 0 else "Never"
     st.markdown(f"""
@@ -157,8 +166,6 @@ with st.sidebar:
         <small>Last active: {last_seen_str}</small>
     </div>
     """, unsafe_allow_html=True)
-
-    st_autorefresh(interval=3000, key="refresh")
 
 # ===== PAGES =====
 def home_page():
@@ -191,92 +198,8 @@ def keyboard_page():
 def mouse_page():
     st.title("🖱️ Precision Mouse Control")
     if current_mode == "Mouse Mode":
-        cols = st.columns([3, 1])
-        with cols[0]:
-            mouse_js = f"""
-            <div id=\"mouseCanvas\" style=\"width: 700px; height: 400px; border: 2px solid white; position: relative; margin: auto; \">
-                <div id=\"cursor\" style=\"position: absolute; width: 10px; height: 10px; background-color: red; border-radius: 50%; pointer-events: none;\"></div>
-            </div>
-            <script>
-                const canvas = document.getElementById(\"mouseCanvas\");
-                const cursor = document.getElementById(\"cursor\");
-                let sendTimer = null;
-                const firebaseUrl = 'https://smarthid-32dfc-default-rtdb.firebaseio.com/hid/mouseData.json?auth={st.secrets.get("FIREBASE_AUTH")}'
-
-                canvas.addEventListener("mousemove", (e) => {
-                    const rect = canvas.getBoundingClientRect();
-                    const x = e.clientX - rect.left;
-                    const y = e.clientY - rect.top;
-
-                    cursor.style.left = `${x - 5}px`;
-                    cursor.style.top = `${y - 5}px`;
-
-                    if (!sendTimer) {
-                        sendTimer = setTimeout(() => {
-                            fetch(firebaseUrl, {
-                                method: 'PATCH',
-                                body: JSON.stringify({ x: x, y: y, click: false, leftClick: false, rightClick: false }),
-                                headers: { 'Content-Type': 'application/json' }
-                            });
-                            sendTimer = null;
-                        }, 50);
-                    }
-                });
-
-                canvas.addEventListener("click", () => {
-                    fetch(firebaseUrl, {
-                        method: 'PATCH',
-                        body: JSON.stringify({ click: true, leftClick: true, rightClick: false }),
-                        headers: { 'Content-Type': 'application/json' }
-                    });
-                    setTimeout(() => {
-                        fetch(firebaseUrl, {
-                            method: 'PATCH',
-                            body: JSON.stringify({ click: false, leftClick: false }),
-                            headers: { 'Content-Type': 'application/json' }
-                        });
-                    }, 100);
-                });
-
-                canvas.addEventListener("contextmenu", (e) => {
-                    e.preventDefault();
-                    fetch(firebaseUrl, {
-                        method: 'PATCH',
-                        body: JSON.stringify({ click: true, leftClick: false, rightClick: true }),
-                        headers: { 'Content-Type': 'application/json' }
-                    });
-                    setTimeout(() => {
-                        fetch(firebaseUrl, {
-                            method: 'PATCH',
-                            body: JSON.stringify({ click: false, rightClick: false }),
-                            headers: { 'Content-Type': 'application/json' }
-                        });
-                    }, 100);
-                });
-            </script>
-            """
-            st.components.v1.html(mouse_js, height=450)
-
-        with cols[1]:
-            st.subheader("⚡ Quick Actions")
-            if st.button("🔜 Scroll Up"):
-                mouse_ref.child('scroll').set(1)
-            if st.button("🔝 Scroll Down"):
-                mouse_ref.child('scroll').set(-1)
-            st.markdown("---")
-            if st.button("🎯 Left Click"):
-                mouse_ref.update({'click': True, 'leftClick': True, 'rightClick': False})
-            if st.button("🎯 Right Click"):
-                mouse_ref.update({'click': True, 'leftClick': False, 'rightClick': True})
-            st.markdown("---")
-            st.subheader("📌 Live Coordinates")
-            mouse_data = mouse_ref.get() or {}
-            st.markdown(f"""
-                **X:** `{mouse_data.get('x', 0)}`  
-                **Y:** `{mouse_data.get('y', 0)}`  
-                **Left Click:** `{'✔️' if mouse_data.get('leftClick') else '❌'}`  
-                **Right Click:** `{'✔️' if mouse_data.get('rightClick') else '❌'}`
-            """)
+        st.markdown("Canvas for mouse control would go here.")
+        st.warning("Mouse control UI not implemented in this demo.")
     else:
         st.warning("Switch to Mouse Mode in sidebar")
 
