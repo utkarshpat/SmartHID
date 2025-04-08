@@ -27,7 +27,7 @@ def check_password():
         submit = st.form_submit_button("Login")
 
         if submit:
-            if password == st.secrets.get("APP_PASSWORD", "default_pass_123"):
+            if password == st.secrets.get("APP_PASSWORD"):
                 st.session_state.authenticated = True
                 st.rerun()
             else:
