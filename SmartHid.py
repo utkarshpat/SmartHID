@@ -2,41 +2,90 @@ import streamlit as st
 from streamlit_option_menu import option_menu
 import firebase_admin
 from firebase_admin import credentials, db
+from datetime import datetime
+import time
 import json
-# Firebase Initialization
+from streamlit_autorefresh import st_autorefresh
+
+# ===== PASSWORD PROTECTION =====
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+    st.session_state.login_attempts = 0
+    st.session_state.lockout_until = 0
+
+def check_password():
+    if st.session_state.authenticated:
+        return True
+
+    if st.session_state.lockout_until > time.time():
+        remaining = int(st.session_state.lockout_until - time.time())
+        st.error(f"⏳ Account locked. Try again in {remaining//60}m {remaining%60}s")
+        st.stop()
+
+    with st.form("auth_form"):
+        st.warning("🔐 Enter password to access SmartHID Pro")
+        password = st.text_input("Password", type="password", key="password_input")
+        submit = st.form_submit_button("Login")
+
+        if submit:
+            if password == st.secrets.get("APP_PASSWORD", "default_pass_123"):
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.session_state.login_attempts += 1
+                remaining_attempts = 5 - st.session_state.login_attempts
+                st.error(f"❌ Wrong password! {remaining_attempts} attempts remaining")
+                if st.session_state.login_attempts >= 5:
+                    st.session_state.lockout_until = time.time() + 300
+                    st.error("🚫 Account locked for 5 minutes")
+                    st.rerun()
+
+    st.stop()
+
+check_password()
+
+# ===== FIREBASE INIT =====
 if not firebase_admin._apps:
     try:
         cred = credentials.Certificate(json.loads(st.secrets["firebase_json"]))
-        firebase_admin.initialize_app(cred, {'databaseURL': 'https://smarthid-32dfc-default-rtdb.firebaseio.com/'})
+        firebase_admin.initialize_app(cred, {
+            'databaseURL': 'https://smarthid-32dfc-default-rtdb.firebaseio.com/'
+        })
     except Exception as e:
         st.error(f"Firebase initialization failed: {e}")
         st.stop()
 
-# Database References
+# ===== ENHANCED STATUS =====
+def get_device_status():
+    try:
+        status_data = db.reference('hid/status').get() or {}
+        last_seen = status_data.get("lastSeen", 0)
+        is_online = status_data.get("online", False) and (time.time() - last_seen < 15)
+        return "🟢 Online" if is_online else "🔴 Offline", last_seen
+    except:
+        return "🔴 Error", 0
+
+# ===== DATABASE SETUP =====
 hid_ref = db.reference('hid')
 typing_ref = hid_ref.child('inputText')
 mouse_ref = hid_ref.child('mouseData')
 ducky_ref = hid_ref.child('duckyScript')
 mode_ref = hid_ref.child('mode')
 led_ref = hid_ref.child('ledColor')
-status_ref = hid_ref.child('status')
 
-# Initialize paths if they don't exist
-def create_path_if_not_exists(ref, default_value=""):
-    if not ref.get():
-        ref.set(default_value)
+def init_path(ref, default):
+    if not ref.get(): ref.set(default)
 
-create_path_if_not_exists(typing_ref, "")
-create_path_if_not_exists(mouse_ref, {"x": 0, "y": 0, "click": False, "leftClick": False, "rightClick": False, "scroll": 0})
-create_path_if_not_exists(ducky_ref, "")
-create_path_if_not_exists(mode_ref, "Typing Mode")
-create_path_if_not_exists(led_ref, "OFF")
-create_path_if_not_exists(status_ref, {"online": False})
+init_path(typing_ref, "")
+init_path(mouse_ref, {"x":0,"y":0,"click":False,"leftClick":False,"rightClick":False,"scroll":0})
+init_path(ducky_ref, "")
+init_path(mode_ref, "Typing Mode")
+init_path(led_ref, "OFF")
 
-# Page Configuration
+# ===== PAGE CONFIG =====
 st.set_page_config(page_title="SmartHID Pro", page_icon="🖱", layout="wide")
 
-# Custom CSS
+# ===== CUSTOM CSS =====
 st.markdown("""
 <style>
 #mouseCanvas {
@@ -68,14 +117,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Sidebar Controls
+# ===== SIDEBAR =====
 with st.sidebar:
     st.title("Control Panel")
-    current_mode = st.radio(
-        "**Operation Mode**",
-        ["Typing Mode", "Mouse Mode", "Ducky Mode"],
-        index=0
-    )
+    current_mode = st.radio("**Operation Mode**", ["Typing Mode", "Mouse Mode", "Ducky Mode"], index=0)
     try:
         mode_ref.set(current_mode)
     except Exception as e:
@@ -100,35 +145,31 @@ with st.sidebar:
         except Exception as e:
             st.error(f"Failed to set LED color: {e}")
 
-    st.markdown(
-        f'<div class="led-preview" style="background-color: {preview_color};"></div>',
-        unsafe_allow_html=True
-    )
+    st.markdown(f'<div class="led-preview" style="background-color: {preview_color};"></div>', unsafe_allow_html=True)
 
-    # ESP32 Online/Offline Status
     st.markdown("---")
-    st.subheader("📡 Device Status")
-    try:
-        status_data = status_ref.get() or {}
-        online_status = "🟢 Online" if status_data.get("online", False) else "🔴 Offline"
-        st.markdown(f"""
-        <div class="status-box" style="background-color: black">
-            <b>ESP32:</b> {online_status}
-        </div>
-        """, unsafe_allow_html=True)
-    except Exception as e:
-        st.error(f"Failed to fetch status: {e}")
+    st.subheader("🛁 Device Status")
+    status, last_seen = get_device_status()
+    last_seen_str = datetime.fromtimestamp(last_seen).strftime('%H:%M:%S') if last_seen > 0 else "Never"
+    st.markdown(f"""
+    <div class="status-box" style="background-color: black; color: white">
+        <b>ESP32:</b> {status}<br>
+        <small>Last active: {last_seen_str}</small>
+    </div>
+    """, unsafe_allow_html=True)
 
-# Main Pages
+    st_autorefresh(interval=3000, key="refresh")
+
+# ===== PAGES =====
 def home_page():
     st.title("🎮 SmartHID Pro Controller")
     st.markdown("""
     ## Remote Device Control System
     **Features:**
-    - ✍️ **Text Typing -** Send keyboard input
-    - 🖱️ **Precision Mouse -** Real-time control (500x400 grid)
-    - 🦆 **Ducky Script -** Automate tasks
-    - 🌈 **LED Control -** RGB lighting with custom colors
+    - ✍️ **Text Typing** - Send keyboard input
+    - 🖱️ **Precision Mouse** - Real-time control
+    - 🦆 **Ducky Script** - Automate tasks
+    - 🌈 **LED Control** - RGB lighting
     """)
 
 def keyboard_page():
@@ -152,16 +193,15 @@ def mouse_page():
     if current_mode == "Mouse Mode":
         cols = st.columns([3, 1])
         with cols[0]:
-            # Added Firebase auth token in URL
-            mouse_js = """
-            <div id="mouseCanvas" style="width: 700px; height: 400px; border: 2px solid white; position: relative; margin: auto; ">
-                <div id="cursor" style="position: absolute; width: 10px; height: 10px; background-color: red; border-radius: 50%; pointer-events: none;"></div>
+            mouse_js = f"""
+            <div id=\"mouseCanvas\" style=\"width: 700px; height: 400px; border: 2px solid white; position: relative; margin: auto; \">
+                <div id=\"cursor\" style=\"position: absolute; width: 10px; height: 10px; background-color: red; border-radius: 50%; pointer-events: none;\"></div>
             </div>
             <script>
-                const canvas = document.getElementById("mouseCanvas");
-                const cursor = document.getElementById("cursor");
+                const canvas = document.getElementById(\"mouseCanvas\");
+                const cursor = document.getElementById(\"cursor\");
                 let sendTimer = null;
-                const firebaseUrl = 'https://smarthid-32dfc-default-rtdb.firebaseio.com/hid/mouseData.json?auth=PnwEo5xDXuE0iKnKFLwFSgQ5LNhxEZh8XxkYFb0s';
+                const firebaseUrl = 'https://smarthid-32dfc-default-rtdb.firebaseio.com/hid/mouseData.json?auth={st.secrets.get("FIREBASE_AUTH")}'
 
                 canvas.addEventListener("mousemove", (e) => {
                     const rect = canvas.getBoundingClientRect();
@@ -175,13 +215,7 @@ def mouse_page():
                         sendTimer = setTimeout(() => {
                             fetch(firebaseUrl, {
                                 method: 'PATCH',
-                                body: JSON.stringify({
-                                    x: x,
-                                    y: y,
-                                    click: false,
-                                    leftClick: false,
-                                    rightClick: false
-                                }),
+                                body: JSON.stringify({ x: x, y: y, click: false, leftClick: false, rightClick: false }),
                                 headers: { 'Content-Type': 'application/json' }
                             });
                             sendTimer = null;
@@ -192,20 +226,13 @@ def mouse_page():
                 canvas.addEventListener("click", () => {
                     fetch(firebaseUrl, {
                         method: 'PATCH',
-                        body: JSON.stringify({
-                            click: true,
-                            leftClick: true,
-                            rightClick: false
-                        }),
+                        body: JSON.stringify({ click: true, leftClick: true, rightClick: false }),
                         headers: { 'Content-Type': 'application/json' }
                     });
                     setTimeout(() => {
                         fetch(firebaseUrl, {
                             method: 'PATCH',
-                            body: JSON.stringify({
-                                click: false,
-                                leftClick: false
-                            }),
+                            body: JSON.stringify({ click: false, leftClick: false }),
                             headers: { 'Content-Type': 'application/json' }
                         });
                     }, 100);
@@ -215,20 +242,13 @@ def mouse_page():
                     e.preventDefault();
                     fetch(firebaseUrl, {
                         method: 'PATCH',
-                        body: JSON.stringify({
-                            click: true,
-                            leftClick: false,
-                            rightClick: true
-                        }),
+                        body: JSON.stringify({ click: true, leftClick: false, rightClick: true }),
                         headers: { 'Content-Type': 'application/json' }
                     });
                     setTimeout(() => {
                         fetch(firebaseUrl, {
                             method: 'PATCH',
-                            body: JSON.stringify({
-                                click: false,
-                                rightClick: false
-                            }),
+                            body: JSON.stringify({ click: false, rightClick: false }),
                             headers: { 'Content-Type': 'application/json' }
                         });
                     }, 100);
@@ -239,48 +259,31 @@ def mouse_page():
 
         with cols[1]:
             st.subheader("⚡ Quick Actions")
-            if st.button("🔼 Scroll Up"):
-                try:
-                    mouse_ref.child('scroll').set(1)
-                except Exception as e:
-                    st.error(f"Scroll Up failed: {e}")
-            if st.button("🔽 Scroll Down"):
-                try:
-                    mouse_ref.child('scroll').set(-1)
-                except Exception as e:
-                    st.error(f"Scroll Down failed: {e}")
+            if st.button("🔜 Scroll Up"):
+                mouse_ref.child('scroll').set(1)
+            if st.button("🔝 Scroll Down"):
+                mouse_ref.child('scroll').set(-1)
             st.markdown("---")
             if st.button("🎯 Left Click"):
-                try:
-                    mouse_ref.update({'click': True, 'leftClick': True, 'rightClick': False})
-                    st.success("Left Click triggered!")
-                except Exception as e:
-                    st.error(f"Left Click failed: {e}")
+                mouse_ref.update({'click': True, 'leftClick': True, 'rightClick': False})
             if st.button("🎯 Right Click"):
-                try:
-                    mouse_ref.update({'click': True, 'leftClick': False, 'rightClick': True})
-                    st.success("Right Click triggered!")
-                except Exception as e:
-                    st.error(f"Right Click failed: {e}")
+                mouse_ref.update({'click': True, 'leftClick': False, 'rightClick': True})
             st.markdown("---")
             st.subheader("📌 Live Coordinates")
-            try:
-                mouse_data = mouse_ref.get() or {}
-                st.markdown(f"""
-                    **X:** `{mouse_data.get('x', 0)}`  
-                    **Y:** `{mouse_data.get('y', 0)}`  
-                    **Left Click:** `{'✔️' if mouse_data.get('leftClick') else '❌'}`  
-                    **Right Click:** `{'✔️' if mouse_data.get('rightClick') else '❌'}`
-                """)
-            except Exception as e:
-                st.error(f"Error fetching coordinates: {e}")
+            mouse_data = mouse_ref.get() or {}
+            st.markdown(f"""
+                **X:** `{mouse_data.get('x', 0)}`  
+                **Y:** `{mouse_data.get('y', 0)}`  
+                **Left Click:** `{'✔️' if mouse_data.get('leftClick') else '❌'}`  
+                **Right Click:** `{'✔️' if mouse_data.get('rightClick') else '❌'}`
+            """)
     else:
         st.warning("Switch to Mouse Mode in sidebar")
 
 def ducky_page():
     st.title("🦆 Ducky Script Mode")
     if current_mode == "Ducky Mode":
-        script = st.text_area("Enter Ducky Script:", height=300, help="Example:\nDELAY 1000\nSTRING Hello World\nENTER")
+        script = st.text_area("Enter Ducky Script:", height=300)
         if st.button("Execute Script"):
             if script.strip():
                 try:
@@ -293,7 +296,7 @@ def ducky_page():
     else:
         st.warning("Switch to Ducky Mode in sidebar")
 
-# Page Routing
+# ===== PAGE ROUTING =====
 PAGES = {
     "Home": home_page,
     "Keyboard": keyboard_page,
@@ -312,7 +315,7 @@ selected = option_menu(
 
 PAGES[selected]()
 
-# Footer
+# ===== FOOTER =====
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: #666;">
